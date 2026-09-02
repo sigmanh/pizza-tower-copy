@@ -1,0 +1,1837 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pizza Panic - Fast Platformer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #171717;
+    font-family: Arial, sans-serif;
+}
+
+canvas {
+    display: block;
+    margin: auto;
+    background: #70d6ff;
+}
+
+#controls {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+
+    color: white;
+    background: rgba(0,0,0,.7);
+    padding: 9px 15px;
+    border-radius: 10px;
+
+    font-size: 14px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="controls">
+    A/D = Move &nbsp; | &nbsp;
+    SHIFT = Sprint &nbsp; | &nbsp;
+    SPACE = Jump &nbsp; | &nbsp;
+    J = Dash &nbsp; | &nbsp;
+    S = Ground Pound
+</div>
+
+<canvas id="game" width="1100" height="650"></canvas>
+
+<script>
+
+// =====================================================
+// EDIT THESE SETTINGS
+// =====================================================
+
+const SETTINGS = {
+
+    // Physics
+    gravity: 0.60,
+    maxFallSpeed: 8,
+
+    // Movement
+    walkSpeed: 3,
+    sprintSpeed: 7,
+
+    // Acceleration
+    acceleration: 0.8,
+    airAcceleration: 0.55,
+
+    // Friction
+    groundFriction: 0.78,
+    airFriction: 0.50,
+
+    // Jump
+    jumpPower: 14,
+
+    // Wall jump
+    wallJumpX: 9,
+    wallJumpY: 13,
+
+    // Dash
+    dashSpeed: 11,
+    dashTime: 0.16,
+    dashCooldown: 0.35,
+
+    // Ground pound
+    poundSpeed: 46,
+
+    // Escape timer
+    escapeTime: 30,
+
+    // Screen shake
+    maxShake: 18,
+
+    // Player
+    width: 36,
+    height: 50,
+
+    // Level
+    levelWidth: 4500,
+
+    // How close to start player must return
+    finishDistance: 100
+};
+
+
+// =====================================================
+// CANVAS
+// =====================================================
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+
+// =====================================================
+// INPUT
+// =====================================================
+
+const keys = {};
+const pressed = {};
+
+window.addEventListener("keydown", e => {
+
+    const key = e.key.toLowerCase();
+
+    if (!keys[key]) {
+        pressed[key] = true;
+    }
+
+    keys[key] = true;
+
+    if (e.code === "Space") {
+        e.preventDefault();
+
+        if (!keys.space) {
+            pressed.space = true;
+        }
+
+        keys.space = true;
+    }
+
+});
+
+window.addEventListener("keyup", e => {
+
+    const key = e.key.toLowerCase();
+
+    keys[key] = false;
+
+    if (e.code === "Space") {
+        keys.space = false;
+    }
+
+});
+
+
+// =====================================================
+// PLAYER
+// =====================================================
+
+const player = {
+
+    x: 100,
+    y: 430,
+
+    width: SETTINGS.width,
+    height: SETTINGS.height,
+
+    vx: 0,
+    vy: 0,
+
+    grounded: false,
+
+    facing: 1,
+
+    wallLeft: false,
+    wallRight: false,
+
+    dashAvailable: true,
+    dashing: false,
+    dashTimer: 0,
+    dashCooldown: 0,
+
+    pounding: false,
+
+    squash: 1,
+    stretch: 1,
+
+    runAnimation: 0
+};
+
+
+// =====================================================
+// GAME STATE
+// =====================================================
+
+let cameraX = 0;
+
+let screenShake = 0;
+
+let escapeStarted = false;
+let gameWon = false;
+let gameLost = false;
+
+let escapeStartTime = 0;
+let escapeFinalTime = 0;
+
+let score = 0;
+let combo = 0;
+let comboTimer = 0;
+
+let levelTime = 0;
+let levelStartTime = performance.now();
+
+
+// =====================================================
+// PLATFORMS
+// =====================================================
+
+const platforms = [
+
+    // START AREA
+    {x: 0, y: 540, width: 420, height: 110},
+
+    // LOW PLATFORM
+    {x: 500, y: 470, width: 240, height: 35},
+
+    // HIGH PLATFORM
+    {x: 800, y: 380, width: 190, height: 35},
+
+    // GAP SECTION
+    {x: 1060, y: 500, width: 150, height: 35},
+    {x: 1280, y: 430, width: 180, height: 35},
+    {x: 1520, y: 350, width: 180, height: 35},
+
+    // BIG PLATFORM
+    {x: 1760, y: 500, width: 330, height: 35},
+
+    // VERTICAL SECTION
+    {x: 2150, y: 420, width: 180, height: 35},
+    {x: 2400, y: 320, width: 180, height: 35},
+    {x: 2640, y: 420, width: 180, height: 35},
+
+    // FINAL SECTION
+    {x: 2900, y: 500, width: 240, height: 35},
+    {x: 3200, y: 400, width: 180, height: 35},
+    {x: 3450, y: 400, width: 180, height: 35},
+
+    // BUTTON PLATFORM
+    {x: 3700, y: 540, width: 300, height: 110}
+];
+
+
+// =====================================================
+// BREAKABLE BLOCKS
+// =====================================================
+
+const blocks = [
+
+    {x: 430, y: 470, width: 60, height: 35, broken: false},
+
+    {x: 740, y: 470, width: 60, height: 35, broken: false},
+
+    {x: 1000, y: 500, width: 60, height: 35, broken: false},
+
+    {x: 1460, y: 430, width: 60, height: 35, broken: false},
+
+    {x: 1700, y: 500, width: 60, height: 35, broken: false},
+
+    {x: 2090, y: 420, width: 60, height: 35, broken: false},
+
+    {x: 2330, y: 320, width: 60, height: 35, broken: false},
+
+    {x: 2840, y: 500, width: 60, height: 35, broken: false},
+
+    {x: 3380, y: 300, width: 60, height: 35, broken: false}
+];
+
+
+// =====================================================
+// END BUTTON
+// =====================================================
+
+const button = {
+
+    x: 3820,
+    y: 490,
+
+    width: 60,
+    height: 50,
+
+    pressed: false
+};
+
+
+// =====================================================
+// START EXIT
+// =====================================================
+
+const startExit = {
+
+    x: 40,
+    y: 440,
+
+    width: 90,
+    height: 100
+};
+
+
+// =====================================================
+// COLLISION
+// =====================================================
+
+function collision(a, b) {
+
+    return (
+        a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y
+    );
+}
+
+
+// =====================================================
+// ADD SCORE
+// =====================================================
+
+function addScore(amount) {
+
+    score += amount;
+
+    combo++;
+
+    comboTimer = 2.5;
+
+}
+
+
+// =====================================================
+// SCREEN SHAKE
+// =====================================================
+
+function shake(amount) {
+
+    screenShake = Math.min(
+        SETTINGS.maxShake,
+        screenShake + amount
+    );
+
+}
+
+
+// =====================================================
+// BREAK BLOCK
+// =====================================================
+
+function breakBlock(block) {
+
+    if (block.broken) return;
+
+    block.broken = true;
+
+    addScore(100);
+
+    shake(8);
+
+}
+
+
+// =====================================================
+// RESET
+// =====================================================
+
+function resetPlayer() {
+
+    player.x = 100;
+    player.y = 430;
+
+    player.vx = 0;
+    player.vy = 0;
+
+    player.dashing = false;
+    player.pounding = false;
+
+    player.dashAvailable = true;
+
+    cameraX = 0;
+}
+
+
+// =====================================================
+// RESTART
+// =====================================================
+
+function restartGame() {
+
+    resetPlayer();
+
+    escapeStarted = false;
+    gameWon = false;
+    gameLost = false;
+
+    button.pressed = false;
+
+    score = 0;
+    combo = 0;
+
+    levelStartTime = performance.now();
+
+    for (const block of blocks) {
+        block.broken = false;
+    }
+}
+
+
+// =====================================================
+// MOVEMENT
+// =====================================================
+
+function updateMovement() {
+
+    const left =
+        keys.a || keys.arrowleft;
+
+    const right =
+        keys.d || keys.arrowright;
+
+
+    // ---------------------------------------------
+    // DASH
+    // ---------------------------------------------
+
+    if (
+        pressed.j &&
+        player.dashAvailable &&
+        !player.dashing
+    ) {
+
+        player.dashing = true;
+
+        player.dashTimer =
+            SETTINGS.dashTime;
+
+        player.dashCooldown =
+            SETTINGS.dashCooldown;
+
+        player.dashAvailable = false;
+
+        player.vy = 0;
+
+        player.vx =
+            player.facing *
+            SETTINGS.dashSpeed;
+
+        shake(5);
+    }
+
+
+    // ---------------------------------------------
+    // DASHING
+    // ---------------------------------------------
+
+    if (player.dashing) {
+
+        player.dashTimer -= 1 / 60;
+
+        player.vx =
+            player.facing *
+            SETTINGS.dashSpeed;
+
+        player.vy = 0;
+
+        if (player.dashTimer <= 0) {
+
+            player.dashing = false;
+
+        }
+
+        return;
+    }
+
+
+    // ---------------------------------------------
+    // DASH COOLDOWN
+    // ---------------------------------------------
+
+    if (player.dashCooldown > 0) {
+
+        player.dashCooldown -= 1 / 60;
+
+    }
+
+    if (
+        player.dashCooldown <= 0 &&
+        player.grounded
+    ) {
+
+        player.dashAvailable = true;
+
+    }
+
+
+    // ---------------------------------------------
+    // SPEED
+    // ---------------------------------------------
+
+    const targetSpeed =
+        keys.shift
+            ? SETTINGS.sprintSpeed
+            : SETTINGS.walkSpeed;
+
+
+    // ---------------------------------------------
+    // HORIZONTAL MOVEMENT
+    // ---------------------------------------------
+
+    if (left) {
+
+        player.facing = -1;
+
+        const accel =
+            player.grounded
+                ? SETTINGS.acceleration
+                : SETTINGS.airAcceleration;
+
+        player.vx -= accel;
+
+        if (player.vx < -targetSpeed) {
+            player.vx = -targetSpeed;
+        }
+
+    }
+
+
+    if (right) {
+
+        player.facing = 1;
+
+        const accel =
+            player.grounded
+                ? SETTINGS.acceleration
+                : SETTINGS.airAcceleration;
+
+        player.vx += accel;
+
+        if (player.vx > targetSpeed) {
+            player.vx = targetSpeed;
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // FRICTION
+    // ---------------------------------------------
+
+    if (!left && !right) {
+
+        if (player.grounded) {
+
+            player.vx *=
+                SETTINGS.groundFriction;
+
+        } else {
+
+            player.vx *=
+                SETTINGS.airFriction;
+
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // JUMP
+    // ---------------------------------------------
+
+    if (pressed.space) {
+
+        if (player.grounded) {
+
+            player.vy =
+                -SETTINGS.jumpPower;
+
+            player.grounded = false;
+
+            player.squash = 0.8;
+            player.stretch = 1.25;
+
+            shake(3);
+
+        }
+
+        // Wall jump
+        else if (player.wallLeft) {
+
+            player.vx =
+                SETTINGS.wallJumpX;
+
+            player.vy =
+                -SETTINGS.wallJumpY;
+
+        }
+
+        else if (player.wallRight) {
+
+            player.vx =
+                -SETTINGS.wallJumpX;
+
+            player.vy =
+                -SETTINGS.wallJumpY;
+
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // GROUND POUND
+    // ---------------------------------------------
+
+    if (
+        keys.s &&
+        !player.grounded &&
+        !player.pounding
+    ) {
+
+        player.pounding = true;
+
+        player.vy =
+            SETTINGS.poundSpeed;
+
+    }
+
+}
+
+
+// =====================================================
+// PHYSICS
+// =====================================================
+
+function updatePhysics() {
+
+    // Gravity
+
+    if (!player.dashing) {
+
+        player.vy +=
+            SETTINGS.gravity;
+
+        if (
+            player.vy >
+            SETTINGS.maxFallSpeed
+        ) {
+
+            player.vy =
+                SETTINGS.maxFallSpeed;
+
+        }
+
+    }
+
+
+    // Save old position
+
+    const oldY = player.y;
+
+
+    // Move
+
+    player.x += player.vx;
+
+    player.y += player.vy;
+
+
+    player.grounded = false;
+
+    player.wallLeft = false;
+    player.wallRight = false;
+
+
+    // ---------------------------------------------
+    // PLATFORM COLLISION
+    // ---------------------------------------------
+
+    for (const platform of platforms) {
+
+        if (!collision(player, platform)) {
+            continue;
+        }
+
+
+        // Landing
+
+        if (
+            player.vy >= 0 &&
+            oldY + player.height <= platform.y + 5
+        ) {
+
+            player.y =
+                platform.y - player.height;
+
+            player.vy = 0;
+
+            if (player.pounding) {
+
+                shake(12);
+
+                addScore(50);
+
+                player.pounding = false;
+
+            }
+
+            player.grounded = true;
+
+            player.dashAvailable = true;
+
+        }
+
+
+        // Ceiling
+
+        else if (
+            player.vy < 0 &&
+            oldY >=
+            platform.y + platform.height - 5
+        ) {
+
+            player.y =
+                platform.y +
+                platform.height;
+
+            player.vy = 0;
+
+        }
+
+
+        // Left wall
+
+        else if (
+            player.vx > 0 &&
+            player.x + player.width >
+            platform.x &&
+            player.x < platform.x
+        ) {
+
+            player.x =
+                platform.x -
+                player.width;
+
+            player.vx = 0;
+
+            player.wallRight = true;
+
+        }
+
+
+        // Right wall
+
+        else if (
+            player.vx < 0 &&
+            player.x <
+            platform.x + platform.width &&
+            player.x + player.width >
+            platform.x + platform.width
+        ) {
+
+            player.x =
+                platform.x +
+                platform.width;
+
+            player.vx = 0;
+
+            player.wallLeft = true;
+
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // BREAKABLE BLOCKS
+    // ---------------------------------------------
+
+    for (const block of blocks) {
+
+        if (block.broken) continue;
+
+        if (!collision(player, block)) continue;
+
+
+        // Fast movement breaks block
+
+        if (
+            Math.abs(player.vx) > 8 ||
+            player.pounding
+        ) {
+
+            breakBlock(block);
+
+        }
+
+        else if (
+            player.vy >= 0 &&
+            oldY + player.height <= block.y + 5
+        ) {
+
+            player.y =
+                block.y - player.height;
+
+            player.vy = 0;
+
+            player.grounded = true;
+
+        }
+
+    }
+
+
+    // ---------------------------------------------
+    // VOID
+    // ---------------------------------------------
+
+    if (player.y > 800) {
+
+        resetPlayer();
+
+    }
+
+
+    // ---------------------------------------------
+    // LEVEL BOUNDS
+    // ---------------------------------------------
+
+    if (player.x < 0) {
+
+        player.x = 0;
+
+        player.vx = 0;
+
+    }
+
+    if (
+        player.x >
+        SETTINGS.levelWidth -
+        player.width
+    ) {
+
+        player.x =
+            SETTINGS.levelWidth -
+            player.width;
+
+    }
+
+}
+
+
+// =====================================================
+// BUTTON
+// =====================================================
+
+function updateButton() {
+
+    if (
+        !button.pressed &&
+        collision(player, button)
+    ) {
+
+        button.pressed = true;
+
+        escapeStarted = true;
+
+        escapeStartTime =
+            performance.now();
+
+        combo = 0;
+
+        shake(SETTINGS.maxShake);
+
+    }
+
+
+    // Countdown
+
+    if (escapeStarted && !gameWon) {
+
+        const elapsed =
+            (performance.now() -
+            escapeStartTime) / 1000;
+
+        const remaining =
+            SETTINGS.escapeTime -
+            elapsed;
+
+
+        if (remaining <= 0) {
+
+            gameLost = true;
+
+        }
+
+    }
+
+
+    // Return to beginning
+
+    if (
+        escapeStarted &&
+        !gameLost &&
+        player.x <=
+        SETTINGS.finishDistance
+    ) {
+
+        gameWon = true;
+
+        escapeFinalTime =
+            (performance.now() -
+            escapeStartTime) / 1000;
+
+    }
+
+}
+
+
+// =====================================================
+// CAMERA
+// =====================================================
+
+function updateCamera() {
+
+    const target =
+        player.x - 350;
+
+    cameraX +=
+        (target - cameraX) * 0.12;
+
+
+    if (cameraX < 0) {
+        cameraX = 0;
+    }
+
+
+    const maxCamera =
+        SETTINGS.levelWidth -
+        canvas.width;
+
+
+    if (cameraX > maxCamera) {
+
+        cameraX = maxCamera;
+
+    }
+
+
+    // Shake
+
+    if (screenShake > 0) {
+
+        screenShake *= 0.86;
+
+    }
+
+}
+
+
+// =====================================================
+// ANIMATION
+// =====================================================
+
+function updateAnimation() {
+
+    player.squash +=
+        (1 - player.squash) * 0.15;
+
+    player.stretch +=
+        (1 - player.stretch) * 0.15;
+
+
+    if (Math.abs(player.vx) > 1) {
+
+        player.runAnimation +=
+            Math.abs(player.vx) * 0.08;
+
+    }
+
+
+    if (comboTimer > 0) {
+
+        comboTimer -= 1 / 60;
+
+    }
+
+    else {
+
+        combo = 0;
+
+    }
+
+}
+
+
+// =====================================================
+// DRAW BACKGROUND
+// =====================================================
+
+function drawBackground() {
+
+    // Sky
+
+    const gradient =
+        ctx.createLinearGradient(
+            0, 0,
+            0, canvas.height
+        );
+
+    gradient.addColorStop(
+        0,
+        "#54c8ff"
+    );
+
+    gradient.addColorStop(
+        1,
+        "#d7f9ff"
+    );
+
+    ctx.fillStyle = gradient;
+
+    ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    // Background buildings
+
+    for (let i = 0; i < 20; i++) {
+
+        const x =
+            i * 250 -
+            cameraX * 0.25;
+
+        const h =
+            100 +
+            (i % 4) * 50;
+
+        ctx.fillStyle =
+            "#6b7280";
+
+        ctx.fillRect(
+            x,
+            540 - h,
+            170,
+            h
+        );
+
+    }
+
+
+    // Clouds
+
+    ctx.fillStyle =
+        "rgba(255,255,255,.8)";
+
+    for (let i = 0; i < 10; i++) {
+
+        const x =
+            i * 450 -
+            cameraX * 0.15;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            120 + (i % 3) * 50,
+            35,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.arc(
+            x + 40,
+            105 + (i % 3) * 50,
+            45,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.arc(
+            x + 85,
+            125 + (i % 3) * 50,
+            30,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+
+    }
+
+}
+
+
+// =====================================================
+// DRAW PLATFORMS
+// =====================================================
+
+function drawPlatforms() {
+
+    for (const p of platforms) {
+
+        const x =
+            p.x - cameraX;
+
+
+        // Main platform
+
+        ctx.fillStyle = "#9a4f24";
+
+        ctx.fillRect(
+            x,
+            p.y,
+            p.width,
+            p.height
+        );
+
+
+        // Bright top
+
+        ctx.fillStyle = "#35c759";
+
+        ctx.fillRect(
+            x,
+            p.y,
+            p.width,
+            9
+        );
+
+
+        // Little details
+
+        ctx.fillStyle =
+            "rgba(0,0,0,.15)";
+
+        for (
+            let i = 0;
+            i < p.width;
+            i += 35
+        ) {
+
+            ctx.fillRect(
+                x + i,
+                p.y + 15,
+                18,
+                5
+            );
+
+        }
+
+    }
+
+}
+
+
+// =====================================================
+// DRAW BLOCKS
+// =====================================================
+
+function drawBlocks() {
+
+    for (const b of blocks) {
+
+        if (b.broken) continue;
+
+        const x =
+            b.x - cameraX;
+
+
+        ctx.fillStyle =
+            "#f59e0b";
+
+        ctx.fillRect(
+            x,
+            b.y,
+            b.width,
+            b.height
+        );
+
+
+        ctx.strokeStyle =
+            "#7c2d12";
+
+        ctx.lineWidth = 4;
+
+        ctx.strokeRect(
+            x,
+            b.y,
+            b.width,
+            b.height
+        );
+
+
+        ctx.fillStyle =
+            "#fef3c7";
+
+        ctx.font = "20px Arial";
+
+        ctx.fillText(
+            "!",
+            x + 23,
+            b.y + 25
+        );
+
+    }
+
+}
+
+
+// =====================================================
+// DRAW BUTTON
+// =====================================================
+
+function drawButton() {
+
+    const x =
+        button.x - cameraX;
+
+
+    // Sign
+
+    ctx.fillStyle =
+        "#111827";
+
+    ctx.fillRect(
+        x - 45,
+        button.y - 75,
+        150,
+        50
+    );
+
+
+    ctx.fillStyle =
+        "white";
+
+    ctx.font =
+        "18px Arial";
+
+    ctx.fillText(
+        button.pressed
+            ? "RUN!!!"
+            : "PRESS ME!",
+        x - 35,
+        button.y - 44
+    );
+
+
+    // Button
+
+    ctx.fillStyle =
+        button.pressed
+            ? "#22c55e"
+            : "#ef4444";
+
+
+    ctx.beginPath();
+
+    ctx.arc(
+        x + 30,
+        button.y + 25,
+        30,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+
+    ctx.strokeStyle =
+        "#7f1d1d";
+
+    ctx.lineWidth = 5;
+
+    ctx.stroke();
+
+
+    // Pole
+
+    ctx.fillStyle =
+        "#374151";
+
+    ctx.fillRect(
+        x + 25,
+        button.y + 50,
+        10,
+        50
+    );
+
+}
+
+
+// =====================================================
+// DRAW START
+// =====================================================
+
+function drawStart() {
+
+    const x =
+        startExit.x - cameraX;
+
+
+    ctx.fillStyle =
+        "#111827";
+
+    ctx.fillRect(
+        x,
+        startExit.y,
+        startExit.width,
+        startExit.height
+    );
+
+
+    ctx.fillStyle =
+        "#22c55e";
+
+    ctx.fillRect(
+        x + 10,
+        startExit.y + 10,
+        startExit.width - 20,
+        startExit.height - 10
+    );
+
+
+    ctx.fillStyle =
+        "white";
+
+    ctx.font =
+        "18px Arial";
+
+    ctx.fillText(
+        "EXIT",
+        x + 20,
+        startExit.y + 60
+    );
+
+}
+
+
+// =====================================================
+// DRAW PLAYER
+// =====================================================
+
+function drawPlayer() {
+
+    let shakeX = 0;
+    let shakeY = 0;
+
+
+    if (screenShake > 1) {
+
+        shakeX =
+            (Math.random() - .5) *
+            screenShake;
+
+        shakeY =
+            (Math.random() - .5) *
+            screenShake;
+
+    }
+
+
+    const x =
+        player.x -
+        cameraX +
+        shakeX;
+
+    const y =
+        player.y +
+        shakeY;
+
+
+    ctx.save();
+
+
+    // Flip character
+
+    if (player.facing < 0) {
+
+        ctx.translate(
+            x + player.width / 2,
+            0
+        );
+
+        ctx.scale(-1, 1);
+
+        ctx.translate(
+            -(x + player.width / 2),
+            0
+        );
+
+    }
+
+
+    // Stretch/squash
+
+    const drawW =
+        player.width *
+        player.stretch;
+
+    const drawH =
+        player.height *
+        player.squash;
+
+
+    const offsetX =
+        (player.width - drawW) / 2;
+
+    const offsetY =
+        player.height - drawH;
+
+
+    // Body
+
+    ctx.fillStyle =
+        "#ff3b30";
+
+    ctx.fillRect(
+        x + offsetX,
+        y + offsetY,
+        drawW,
+        drawH
+    );
+
+
+    // Hair
+
+    ctx.fillStyle =
+        "#5b2c06";
+
+    ctx.fillRect(
+        x + 5,
+        y + offsetY - 8,
+        drawW - 10,
+        10
+    );
+
+
+    // Eye
+
+    ctx.fillStyle =
+        "white";
+
+    ctx.fillRect(
+        x + drawW - 13,
+        y + 12,
+        8,
+        8
+    );
+
+
+    // Eye pupil
+
+    ctx.fillStyle =
+        "black";
+
+    ctx.fillRect(
+        x + drawW - 9,
+        y + 14,
+        4,
+        4
+    );
+
+
+    // Sprint lines
+
+    if (
+        keys.shift &&
+        Math.abs(player.vx) > 7
+    ) {
+
+        ctx.strokeStyle =
+            "#ffffff";
+
+        ctx.lineWidth = 4;
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            x - 20,
+            y + 15
+        );
+
+        ctx.lineTo(
+            x - 5,
+            y + 15
+        );
+
+        ctx.stroke();
+
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            x - 25,
+            y + 30
+        );
+
+        ctx.lineTo(
+            x - 8,
+            y + 30
+        );
+
+        ctx.stroke();
+
+    }
+
+
+    ctx.restore();
+
+}
+
+
+// =====================================================
+// DRAW UI
+// =====================================================
+
+function drawUI() {
+
+    // Score
+
+    ctx.fillStyle =
+        "rgba(0,0,0,.65)";
+
+    ctx.fillRect(
+        20,
+        65,
+        250,
+        105
+    );
+
+
+    ctx.fillStyle =
+        "white";
+
+    ctx.font =
+        "23px Arial";
+
+    ctx.fillText(
+        "SCORE: " + score,
+        35,
+        95
+    );
+
+
+    ctx.fillText(
+        "COMBO: x" + combo,
+        35,
+        125
+    );
+
+
+    // Escape countdown
+
+    if (escapeStarted && !gameWon && !gameLost) {
+
+        const elapsed =
+            (performance.now() -
+            escapeStartTime) / 1000;
+
+        const remaining =
+            Math.max(
+                0,
+                SETTINGS.escapeTime -
+                elapsed
+            );
+
+
+        ctx.fillStyle =
+            remaining <= 3
+                ? "#ef4444"
+                : "#facc15";
+
+
+        ctx.font =
+            "42px Arial";
+
+        ctx.fillText(
+            remaining.toFixed(2),
+            35,
+            160
+        );
+
+
+        ctx.font =
+            "20px Arial";
+
+        ctx.fillStyle =
+            "#ef4444";
+
+        ctx.fillText(
+            "GET BACK TO THE EXIT!",
+            300,
+            55
+        );
+
+    }
+
+
+    // Won
+
+    if (gameWon) {
+
+        ctx.fillStyle =
+            "rgba(0,0,0,.88)";
+
+        ctx.fillRect(
+            250,
+            170,
+            600,
+            300
+        );
+
+
+        ctx.fillStyle =
+            "#22c55e";
+
+        ctx.font =
+            "52px Arial";
+
+        ctx.fillText(
+            "YOU ESCAPED!",
+            380,
+            250
+        );
+
+
+        ctx.fillStyle =
+            "white";
+
+        ctx.font =
+            "27px Arial";
+
+        ctx.fillText(
+            "Time: " +
+            escapeFinalTime.toFixed(2) +
+            " seconds",
+            425,
+            310
+        );
+
+
+        ctx.fillText(
+            "Score: " + score,
+            465,
+            350
+        );
+
+
+        ctx.font =
+            "20px Arial";
+
+        ctx.fillText(
+            "Press R to play again",
+            430,
+            405
+        );
+
+    }
+
+
+    // Lost
+
+    if (gameLost) {
+
+        ctx.fillStyle =
+            "rgba(0,0,0,.9)";
+
+        ctx.fillRect(
+            250,
+            170,
+            600,
+            300
+        );
+
+
+        ctx.fillStyle =
+            "#ef4444";
+
+        ctx.font =
+            "55px Arial";
+
+        ctx.fillText(
+            "TIME'S UP!",
+            405,
+            255
+        );
+
+
+        ctx.fillStyle =
+            "white";
+
+        ctx.font =
+            "25px Arial";
+
+        ctx.fillText(
+            "You didn't escape fast enough!",
+            365,
+            315
+        );
+
+
+        ctx.font =
+            "20px Arial";
+
+        ctx.fillText(
+            "Press R to try again",
+            450,
+            380
+        );
+
+    }
+
+}
+
+
+// =====================================================
+// UPDATE
+// =====================================================
+
+function update() {
+
+    if (!gameWon && !gameLost) {
+
+        updateMovement();
+
+        updatePhysics();
+
+        updateButton();
+
+        updateCamera();
+
+        updateAnimation();
+
+    }
+
+    // Clear pressed keys
+
+    for (const key in pressed) {
+
+        pressed[key] = false;
+
+    }
+
+}
+
+
+// =====================================================
+// DRAW
+// =====================================================
+
+function draw() {
+
+    ctx.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    drawBackground();
+
+    drawPlatforms();
+
+    drawBlocks();
+
+    drawStart();
+
+    drawButton();
+
+    drawPlayer();
+
+    drawUI();
+
+}
+
+
+// =====================================================
+// RESTART KEY
+// =====================================================
+
+window.addEventListener("keydown", e => {
+
+    if (
+        e.key.toLowerCase() === "r"
+    ) {
+
+        restartGame();
+
+    }
+
+});
+
+
+// =====================================================
+// GAME LOOP
+// =====================================================
+
+function gameLoop() {
+
+    update();
+
+    draw();
+
+    requestAnimationFrame(
+        gameLoop
+    );
+
+}
+
+
+restartGame();
+
+gameLoop();
+
+</script>
+
+</body>
+</html>
